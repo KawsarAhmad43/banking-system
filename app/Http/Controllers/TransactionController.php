@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use Carbon\Carbon;
 use App\Models\User;
 use App\Models\Transaction;
 use Illuminate\Http\Request;
@@ -96,12 +97,9 @@ class TransactionController extends Controller
                 return 0;
             }
 
-            // The first 1K withdrawal per transaction is free
             if ($amount <= 1000) {
                 return 0;
             }
-
-            // The first 5K withdrawal each month is free
             $withdrawalsThisMonth = $user->withdrawals()
                 ->where('transaction_type', 'withdrawal')
                 ->whereMonth('created_at', now()->month)
@@ -112,12 +110,9 @@ class TransactionController extends Controller
             }
         }
 
-        // Decrease the withdrawal fee to 0.015% for Business accounts after a total withdrawal of 50K
         if ($user->account_type === 'Business' && $user->withdrawals()->sum('amount') >= 50000) {
             $withdrawalFeeRate = 0.015;
         }
-
-        // Calculate the withdrawal fee based on the provided rate
         $withdrawalFee = $amount * $withdrawalFeeRate;
 
         return $withdrawalFee;
