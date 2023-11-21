@@ -61,50 +61,66 @@ class TransactionController extends Controller
         $request->validate([
             'amount' => 'required|numeric|min:0',
         ]);
+
         $user = auth()->user();
-    
-        $withdrawalFee = $user->account_type === 'Individual' ? 0.015 : 0.025;
-        if ($user->account_type === 'Individual') {
-            if (now()->dayOfWeek === 5) { 
-                $withdrawalFee = 0;
-            }
-            if ($request->input('amount') <= 1000) {
-                $withdrawalFee = 0;
-            }
-            $withdrawalsThisMonth = $user->withdrawals()
-                ->where('transaction_type', 'withdrawal')
-                ->whereMonth('created_at', now()->month)
-                ->sum('amount');
-    
-            if ($withdrawalsThisMonth + $request->input('amount') <= 5000) {
-                $withdrawalFee = 0;
-            }
-        }
-        if ($user->account_type === 'Business') {
-            $totalWithdrawals = $user->withdrawals()
-                ->where('transaction_type', 'withdrawal')
-                ->sum('amount');
-            if ($totalWithdrawals >= 50000) {
-                $withdrawalFee = 0.015;
-            }
-        }  
-        $actualWithdrawalAmount = $request->input('amount') * (1 - $withdrawalFee);  
-        if ($actualWithdrawalAmount + $withdrawalFee > $user->balance) {
+        $withdrawalAmount = $request->input('amount');
+        $withdrawalFee = $this->calculateWithdrawalFee($user, $withdrawalAmount);
+        $totalWithdrawal = $withdrawalAmount + $withdrawalFee;
+
+        if ($totalWithdrawal > $user->balance) {
             return redirect(route('show-withdrawal-form'))->with('error', 'Insufficient funds for withdrawal');
         }
+
+        $user->balance -= $totalWithdrawal;
+        $user->save();
+
         $withdrawal = new Transaction([
             'user_id' => $user->id,
             'transaction_type' => 'withdrawal',
-            'amount' => $actualWithdrawalAmount,
+            'amount' => $withdrawalAmount,
             'fee' => $withdrawalFee,
             'date' => now(),
         ]);
         $withdrawal->save();
-    
-        $user->balance -= $actualWithdrawalAmount + $withdrawalFee;
-        $user->save();
+
         return redirect(route('show-withdrawal-form'))->with('success', 'Withdrawal successful');
     }
-    
+
+    private function calculateWithdrawalFee($user, $amount)
+    {
+        $withdrawalFeeRate = $user->account_type === 'Individual' ? 0.015 : 0.025;
+
+        if ($user->account_type === 'Individual') {
+            // Each Friday withdrawal is free
+            if (now()->dayOfWeek === Carbon::FRIDAY) {
+                return 0;
+            }
+
+            // The first 1K withdrawal per transaction is free
+            if ($amount <= 1000) {
+                return 0;
+            }
+
+            // The first 5K withdrawal each month is free
+            $withdrawalsThisMonth = $user->withdrawals()
+                ->where('transaction_type', 'withdrawal')
+                ->whereMonth('created_at', now()->month)
+                ->sum('amount');
+
+            if ($withdrawalsThisMonth + $amount <= 5000) {
+                return 0;
+            }
+        }
+
+        // Decrease the withdrawal fee to 0.015% for Business accounts after a total withdrawal of 50K
+        if ($user->account_type === 'Business' && $user->withdrawals()->sum('amount') >= 50000) {
+            $withdrawalFeeRate = 0.015;
+        }
+
+        // Calculate the withdrawal fee based on the provided rate
+        $withdrawalFee = $amount * $withdrawalFeeRate;
+
+        return $withdrawalFee;
+    }
 
 }
